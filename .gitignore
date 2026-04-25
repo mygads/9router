@@ -61,6 +61,8 @@ PUBLIC.en.md
 PR/*
 package-lock.json
 
+.data/*
+
 
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
