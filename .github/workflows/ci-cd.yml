@@ -174,7 +174,7 @@ jobs:
 
           ssh $VPS_USER@$VPS_HOST << 'ENDSSH'
             for i in {1..5}; do
-              if curl -sf http://localhost:20128/dashboard > /dev/null 2>&1; then
+              if curl -sf http://localhost:20128/api/health > /dev/null 2>&1; then
                 echo "✅ Health check passed!"
                 sudo docker ps | grep 9router
                 exit 0
