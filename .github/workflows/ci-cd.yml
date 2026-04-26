@@ -143,11 +143,8 @@ jobs:
           ssh $VPS_USER@$VPS_HOST << ENDSSH
             cd ~/genfity/9router
 
-            # Force pull latest changes (override local, no conflicts)
-            git remote set-url origin https://x-access-token:${GHCR_TOKEN}@github.com/${{ github.repository }}.git
-            git fetch origin master
-            git reset --hard origin/master
-            git remote set-url origin https://github.com/${{ github.repository }}.git
+            # This deploy directory is compose-only, not a git checkout.
+            # CI publishes the image to GHCR; the server only needs to pull and recreate.
 
             # Login to GHCR
             echo "$GHCR_TOKEN" | sudo docker login ghcr.io -u mygads --password-stdin
@@ -157,12 +154,27 @@ jobs:
             sudo -E docker compose pull
             sudo -E docker compose up -d --force-recreate
 
+            # Show running image after deploy
+            sudo docker ps --filter name=9router
+            sudo docker inspect 9router --format '{{.Image}} {{.Created}}'
+            sudo docker logs 9router --tail 20 || true
+
+            # Ensure env file remains root-owned and readable by compose only
+            sudo ls -l ~/genfity/9router/.env ~/genfity/9router/docker-compose.yml
+
+            # Health probe before finishing this SSH session
+            curl -sf http://localhost:20128/api/health > /dev/null
+
+            echo "✅ 9Router deployment complete!"
+
             # Cleanup old images
             echo "🧹 Cleaning up..."
             sudo docker image prune -af --filter "until=24h" 2>/dev/null || true
 
             echo "✅ 9Router deployment complete!"
           ENDSSH
+
+
 
       - name: Health Check
         env:
