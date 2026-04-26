@@ -126,8 +126,8 @@ jobs:
         run: |
           if [ -n "$ENV_FILE" ]; then
             echo "📝 Updating .env file on server (full replace)..."
-            printf '%s' "$ENV_FILE" | ssh $VPS_USER@$VPS_HOST "cat > ~/genfity/9router/.env"
-            echo "✅ ENV file updated!"
+            printf '%s' "$ENV_FILE" | ssh $VPS_USER@$VPS_HOST "cat > /tmp/9router.env && sudo install -m 600 -o root -g root /tmp/9router.env ~/genfity/9router/.env && rm -f /tmp/9router.env"
+            echo "✅ ENV file updated with full replace!"
           else
             echo "⏭️ ENV_FILE secret not set, .env managed manually on server"
           fi
