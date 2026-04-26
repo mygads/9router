@@ -129,6 +129,14 @@ const PROVIDERS = {
     fixedPort: 1455,
     callbackPath: "/auth/callback",
     buildAuthUrl: (config, redirectUri, state, codeChallenge) => {
+      const hostname = (() => {
+        try {
+          return new URL(redirectUri).hostname;
+        } catch {
+          return "";
+        }
+      })();
+      const isLocalRedirect = hostname === "localhost" || hostname === "127.0.0.1";
       const params = {
         response_type: "code",
         client_id: config.clientId,
@@ -136,7 +144,7 @@ const PROVIDERS = {
         scope: config.scope,
         code_challenge: codeChallenge,
         code_challenge_method: config.codeChallengeMethod,
-        ...config.extraParams,
+        ...(isLocalRedirect ? config.extraParams : { id_token_add_organizations: "true" }),
         state: state,
       };
       const queryString = Object.entries(params)

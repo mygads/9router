@@ -26,14 +26,18 @@ function getPublicBaseUrl(request) {
   return `${url.protocol}//${url.host}`;
 }
 
-function buildCallbackUrl(request) {
-  return `${getPublicBaseUrl(request)}/callback`;
+function buildCallbackUrl(request, provider) {
+  const publicBase = getPublicBaseUrl(request);
+  if (provider === "codex") {
+    return `${publicBase}/auth/callback`;
+  }
+  return `${publicBase}/callback`;
 }
 
 export function createPublicOAuthSession({ request, provider, meta }) {
   cleanupExpiredSessions();
 
-  const redirectUri = buildCallbackUrl(request);
+  const redirectUri = buildCallbackUrl(request, provider);
   const authData = generateAuthData(provider, redirectUri, meta);
   const session = {
     provider,
