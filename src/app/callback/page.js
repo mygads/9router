@@ -9,13 +9,13 @@ import { useSearchParams } from "next/navigation";
 function CallbackContent() {
   const searchParams = useSearchParams();
   const [status, setStatus] = useState("processing");
+  const [message, setMessage] = useState("Please wait while we complete the authorization.");
 
   useEffect(() => {
     const code = searchParams.get("code");
     const state = searchParams.get("state");
     const error = searchParams.get("error");
     const errorDescription = searchParams.get("error_description");
-
     const callbackData = {
       code,
       state,
@@ -24,52 +24,94 @@ function CallbackContent() {
       fullUrl: window.location.href,
     };
 
-    let relayed = false;
+    const relayCallback = async () => {
+      let relayed = false;
 
-    // Check if this callback is from expected origin/port
-    const expectedOrigins = [
-      window.location.origin, // Same origin (for most providers)
-      "http://localhost:1455", // Codex specific port
-    ];
-    
-    // Method 1: postMessage to opener (popup mode)
-    if (window.opener) {
+      if (window.opener) {
+        try {
+          window.opener.postMessage({ type: "oauth_callback", data: callbackData }, "*");
+          relayed = true;
+        } catch (e) {
+          console.log("postMessage failed:", e);
+        }
+      }
+
       try {
-        window.opener.postMessage({ type: "oauth_callback", data: callbackData }, "*");
+        const channel = new BroadcastChannel("oauth_callback");
+        channel.postMessage(callbackData);
+        channel.close();
         relayed = true;
       } catch (e) {
-        console.log("postMessage failed:", e);
+        console.log("BroadcastChannel failed:", e);
       }
-    }
 
-    // Method 2: BroadcastChannel (same origin tabs)
-    try {
-      const channel = new BroadcastChannel("oauth_callback");
-      channel.postMessage(callbackData);
-      channel.close();
-      relayed = true;
-    } catch (e) {
-      console.log("BroadcastChannel failed:", e);
-    }
+      try {
+        localStorage.setItem("oauth_callback", JSON.stringify({ ...callbackData, timestamp: Date.now() }));
+        relayed = true;
+      } catch (e) {
+        console.log("localStorage failed:", e);
+      }
 
-    // Method 3: localStorage event (fallback)
-    try {
-      localStorage.setItem("oauth_callback", JSON.stringify({ ...callbackData, timestamp: Date.now() }));
-      relayed = true;
-    } catch (e) {
-      console.log("localStorage failed:", e);
-    }
+      return relayed;
+    };
 
-    if (!(code || error)) {
-      setTimeout(() => setStatus("manual"), 0);
-      return;
-    }
+    const completePublicFlow = async () => {
+      if (!(code || error) || !state) {
+        setTimeout(() => setStatus("manual"), 0);
+        return;
+      }
 
-    setStatus("success");
-    setTimeout(() => {
-      window.close();
-      setTimeout(() => setStatus("done"), 500);
-    }, 1500);
+      try {
+        const sessionRes = await fetch(`/api/oauth/callback/session?state=${encodeURIComponent(state)}`, {
+          cache: "no-store",
+        });
+
+        if (!sessionRes.ok) {
+          await relayCallback();
+          setStatus("success");
+          setTimeout(() => {
+            window.close();
+            setTimeout(() => setStatus("done"), 500);
+          }, 1500);
+          return;
+        }
+
+        const session = await sessionRes.json();
+        const completeRes = await fetch(`/api/oauth/${session.provider}/complete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ state, code, error, errorDescription }),
+        });
+
+        const completeData = await completeRes.json();
+        if (!completeRes.ok) {
+          throw new Error(completeData.error || "Failed to complete OAuth callback");
+        }
+
+        await relayCallback();
+        setMessage("Authorization completed successfully. This window will close automatically...");
+        setStatus("success");
+        setTimeout(() => {
+          window.close();
+          setTimeout(() => setStatus("done"), 500);
+        }, 1500);
+      } catch (e) {
+        console.log("Public callback completion failed:", e);
+        const relayed = await relayCallback();
+        if (relayed) {
+          setMessage("Authorization data was returned to the app. If the popup stays open, you can close it.");
+          setStatus("success");
+          setTimeout(() => {
+            window.close();
+            setTimeout(() => setStatus("done"), 500);
+          }, 1500);
+        } else {
+          setStatus("manual");
+        }
+      }
+    };
+
+    completePublicFlow();
   }, [searchParams]);
 
   return (
@@ -81,7 +123,7 @@ function CallbackContent() {
               <span className="material-symbols-outlined text-3xl text-primary animate-spin">progress_activity</span>
             </div>
             <h1 className="text-xl font-semibold mb-2">Processing...</h1>
-            <p className="text-text-muted">Please wait while we complete the authorization.</p>
+            <p className="text-text-muted">{message}</p>
           </>
         )}
 

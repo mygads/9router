@@ -166,13 +166,15 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         return;
       }
 
-      // Authorization code flow - build redirect URI (some providers require fixed ports)
       const appPort = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
       let redirectUri;
+      let data;
       let codexProxyActive = false;
 
-      if (provider === "codex") {
-        // Try to start proxy on fixed port 1455 → redirect callback to app port
+      const authorizeUrl = new URL(`/api/oauth/${provider}/authorize`, window.location.origin);
+      if (!isLocalhost) {
+        authorizeUrl.searchParams.set("public_callback", "true");
+      } else if (provider === "codex") {
         try {
           const proxyRes = await fetch(`/api/oauth/codex/start-proxy?app_port=${appPort}`);
           const proxyData = await proxyRes.json();
@@ -180,42 +182,28 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         } catch {
           codexProxyActive = false;
         }
-        // Always use fixed port 1455 as redirect_uri (Codex requirement)
         redirectUri = "http://localhost:1455/auth/callback";
+        authorizeUrl.searchParams.set("redirect_uri", redirectUri);
       } else {
         redirectUri = `http://localhost:${appPort}/callback`;
+        authorizeUrl.searchParams.set("redirect_uri", redirectUri);
       }
 
-      // Build authorize URL, optionally passing provider-specific metadata (e.g. gitlab clientId)
-      const authorizeUrl = new URL(`/api/oauth/${provider}/authorize`, window.location.origin);
-      authorizeUrl.searchParams.set("redirect_uri", redirectUri);
       if (oauthMeta) {
         Object.entries(oauthMeta).forEach(([k, v]) => { if (v) authorizeUrl.searchParams.set(k, v); });
       }
+
       const res = await fetch(authorizeUrl.toString());
-      const data = await res.json();
+      data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
-      setAuthData({ ...data, redirectUri });
-
-      if (provider === "codex" && codexProxyActive) {
-        // Proxy active: callback will redirect to app port automatically
-        setStep("waiting");
-        popupRef.current = window.open(data.authUrl, "oauth_popup", "width=600,height=700");
-        if (!popupRef.current) {
-          setStep("input");
-        }
-      } else if (!isLocalhost || provider === "codex") {
-        // Non-localhost or proxy failed: manual input mode
+      setAuthData({ ...data, redirectUri: data.redirectUri || redirectUri });
+      setStep("waiting");
+      popupRef.current = window.open(data.authUrl, "oauth_popup", "width=600,height=700");
+      if (!popupRef.current && !data.publicCallback) {
         setStep("input");
-        window.open(data.authUrl, "_blank");
-      } else {
-        // Localhost (non-Codex): Open popup and wait for message
-        setStep("waiting");
-        popupRef.current = window.open(data.authUrl, "oauth_popup", "width=600,height=700");
-        if (!popupRef.current) {
-          setStep("input");
-        }
+      } else if (!popupRef.current) {
+        window.open(data.authUrl, "_blank", "noopener,noreferrer");
       }
     } catch (err) {
       setError(err.message);
@@ -237,7 +225,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     } else if (!isOpen) {
       // Abort polling and cleanup proxy when modal closes
       pollingAbortRef.current = true;
-      if (provider === "codex") {
+      if (provider === "codex" && isLocalhost) {
         fetch("/api/oauth/codex/stop-proxy").catch(() => {});
       }
     }
@@ -350,11 +338,11 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
 
   // Clear session on modal close + cleanup proxy
   const handleClose = useCallback(() => {
-    if (provider === "codex") {
+    if (provider === "codex" && isLocalhost) {
       fetch("/api/oauth/codex/stop-proxy").catch(() => {});
     }
     onClose();
-  }, [onClose, provider]);
+  }, [isLocalhost, onClose, provider]);
 
   if (!provider || !providerInfo) return null;
   const deviceLoginUrl = deviceData?.verification_uri_complete || deviceData?.verification_uri || "";

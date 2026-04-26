@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
-import { 
-  getProvider, 
-  generateAuthData, 
-  exchangeTokens, 
-  requestDeviceCode, 
-  pollForToken 
+import {
+  getProvider,
+  generateAuthData,
+  exchangeTokens,
+  requestDeviceCode,
+  pollForToken
 } from "@/lib/oauth/providers";
 import { createProviderConnection } from "@/models";
 import { startCodexProxy, stopCodexProxy } from "@/lib/oauth/utils/server";
+import { createPublicOAuthSession, getPublicOAuthSession, completePublicOAuthSession } from "@/lib/oauth/publicSessions";
 
 /**
  * Dynamic OAuth API Route
@@ -23,12 +24,54 @@ export async function GET(request, { params }) {
 
     if (action === "authorize") {
       const redirectUri = searchParams.get("redirect_uri") || "http://localhost:8080/callback";
+      const publicCallback = searchParams.get("public_callback") === "true";
       // Collect provider-specific meta params (e.g. gitlab passes baseUrl, clientId, clientSecret)
-      const reservedParams = new Set(["redirect_uri"]);
+      const reservedParams = new Set(["redirect_uri", "public_callback"]);
       const meta = {};
       searchParams.forEach((value, key) => { if (!reservedParams.has(key)) meta[key] = value; });
+
+      if (publicCallback) {
+        const session = createPublicOAuthSession({
+          request,
+          provider,
+          meta: Object.keys(meta).length ? meta : undefined,
+        });
+        return NextResponse.json(session);
+      }
+
       const authData = generateAuthData(provider, redirectUri, Object.keys(meta).length ? meta : undefined);
       return NextResponse.json(authData);
+    }
+
+    if (action === "session") {
+      const state = searchParams.get("state");
+      const session = getPublicOAuthSession(state);
+      if (!session) {
+        return NextResponse.json({ error: "OAuth session not found" }, { status: 404 });
+      }
+
+      return NextResponse.json({
+        provider: session.provider,
+        redirectUri: session.redirectUri,
+        expiresAt: new Date(session.expiresAt).toISOString(),
+      });
+    }
+
+    if (action === "callback-config") {
+      const publicBase = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || new URL(request.url).origin).replace(/\/$/, "");
+      return NextResponse.json({ callbackUrl: `${publicBase}/callback` });
+    }
+
+    if (action === "start-proxy" && searchParams.get("public_callback") === "true") {
+      return NextResponse.json({ success: false, reason: "public_callback_mode" });
+    }
+
+    if (action === "stop-proxy" && searchParams.get("public_callback") === "true") {
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === "complete") {
+      return NextResponse.json({ error: "Use POST for completion" }, { status: 405 });
     }
 
     if (action === "start-proxy") {
@@ -121,14 +164,14 @@ export async function POST(request, { params }) {
         provider,
         authType: "oauth",
         ...tokenData,
-        expiresAt: tokenData.expiresIn 
-          ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString() 
+        expiresAt: tokenData.expiresIn
+          ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()
           : null,
         testStatus: "active",
       });
 
-      return NextResponse.json({ 
-        success: true, 
+      return NextResponse.json({
+        success: true,
         connection: {
           id: connection.id,
           provider: connection.provider,
@@ -136,6 +179,46 @@ export async function POST(request, { params }) {
           displayName: connection.displayName,
         }
       });
+    }
+
+    if (action === "complete") {
+      const { state, code, error, errorDescription } = body;
+      const connection = await completePublicOAuthSession({ state, code, error, errorDescription });
+      return NextResponse.json({ success: true, connection });
+    }
+
+    if (action === "callback-result") {
+      const { state } = body;
+      const session = getPublicOAuthSession(state);
+      if (!session) {
+        return NextResponse.json({ error: "OAuth session not found" }, { status: 404 });
+      }
+
+      return NextResponse.json({
+        completed: Boolean(session.completed),
+        connection: session.connection,
+        error: session.error,
+      });
+    }
+
+    if (action === "callback-config") {
+      return NextResponse.json({ error: "Use GET for callback config" }, { status: 405 });
+    }
+
+    if (action === "session") {
+      return NextResponse.json({ error: "Use GET for session lookup" }, { status: 405 });
+    }
+
+    if (action === "authorize") {
+      return NextResponse.json({ error: "Use GET for authorization" }, { status: 405 });
+    }
+
+    if (action === "device-code") {
+      return NextResponse.json({ error: "Use GET for device code" }, { status: 405 });
+    }
+
+    if (action === "start-proxy" || action === "stop-proxy") {
+      return NextResponse.json({ error: "Use GET for proxy control" }, { status: 405 });
     }
 
     if (action === "poll") {
